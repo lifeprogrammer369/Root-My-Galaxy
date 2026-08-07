@@ -17,12 +17,18 @@ data class VerifiedPayloads(
 
 class PayloadRepository(private val context: Context) {
     fun loadTargets(): List<TargetProfile> {
-        val commit = resolveMainCommit()
-        val manifestBytes = downloadBytes(rawUrl(commit, "support/targets-v3.json"), MAX_MANIFEST_BYTES)
-        return SupportManifest.parse(manifestBytes).targets.map { profile -> profile.copy(
-            exploit = profile.exploit.copy(url = pinArtifactUrl(profile.exploit.url, commit)),
-            kernelSu = profile.kernelSu.copy(url = pinArtifactUrl(profile.kernelSu.url, commit)),
-        ) }
+        return try {
+            val commit = resolveMainCommit()
+            val manifestBytes = downloadBytes(rawUrl(commit, "support/targets-v3.json"), MAX_MANIFEST_BYTES)
+            SupportManifest.parse(manifestBytes).targets.map { profile -> profile.copy(
+                exploit = profile.exploit.copy(url = pinArtifactUrl(profile.exploit.url, commit)),
+                kernelSu = profile.kernelSu.copy(url = pinArtifactUrl(profile.kernelSu.url, commit)),
+            ) }
+        } catch (error: Throwable) {
+            if (!shouldFallbackToMain(error)) throw error
+            val manifestBytes = downloadBytes("${MUTABLE_RAW_PREFIX}support/targets-v3.json", MAX_MANIFEST_BYTES)
+            SupportManifest.parse(manifestBytes).targets
+        }
     }
 
     fun resolveTarget(snapshot: DeviceSnapshot): TargetProfile = loadTargets()
@@ -100,6 +106,11 @@ class PayloadRepository(private val context: Context) {
     }
 
     private fun rawUrl(commit: String, path: String) = "$RAW_REPOSITORY/$commit/$path"
+
+    private fun shouldFallbackToMain(error: Throwable): Boolean {
+        val message = error.message ?: return false
+        return message.startsWith("HTTP 403") || message.startsWith("HTTP 429")
+    }
 
     private fun pinArtifactUrl(url: String, commit: String): String {
         require(url.startsWith(MUTABLE_RAW_PREFIX)) { context.getString(R.string.repo_url_invalid) }
