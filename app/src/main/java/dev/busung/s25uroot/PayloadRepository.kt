@@ -27,7 +27,12 @@ class PayloadRepository(private val context: Context) {
         } catch (error: Throwable) {
             if (!shouldFallbackToMain(error)) throw error
             val manifestBytes = downloadBytes("${MUTABLE_RAW_PREFIX}support/targets-v3.json", MAX_MANIFEST_BYTES)
-            SupportManifest.parse(manifestBytes).targets
+            SupportManifest.parse(manifestBytes).targets.map { profile ->
+                profile.copy(
+                    exploit = profile.exploit.copy(url = normalizeToMutableRaw(profile.exploit.url)),
+                    kernelSu = profile.kernelSu.copy(url = normalizeToMutableRaw(profile.kernelSu.url)),
+                )
+            }
         }
     }
 
@@ -110,6 +115,14 @@ class PayloadRepository(private val context: Context) {
     private fun shouldFallbackToMain(error: Throwable): Boolean {
         val message = error.message ?: return false
         return message.startsWith("HTTP 403") || message.startsWith("HTTP 429")
+    }
+
+    private fun normalizeToMutableRaw(url: String): String {
+        val mainMarker = "/main/"
+        val mainIndex = url.indexOf(mainMarker)
+        require(mainIndex >= 0) { context.getString(R.string.repo_url_invalid) }
+        val suffix = url.substring(mainIndex + mainMarker.length)
+        return "$MUTABLE_RAW_PREFIX$suffix"
     }
 
     private fun pinArtifactUrl(url: String, commit: String): String {
