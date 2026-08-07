@@ -21,7 +21,7 @@ android {
         versionCode = 12
         versionName = "0.2.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "PAYLOADS_REPO", "\"lifeprogrammer369/Root-My-Galaxy-Payloads\"")
+        buildConfigField("String", "PAYLOADS_REPO", "\"BuSung-dev/Root-My-Galaxy-Payloads\"")
 
         ndk {
             abiFilters += "arm64-v8a"
