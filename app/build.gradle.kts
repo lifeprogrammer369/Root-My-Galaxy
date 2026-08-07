@@ -4,8 +4,15 @@ plugins {
 }
 
 android {
+    val ciCompileSdk = providers.gradleProperty("CI_COMPILE_SDK").orNull?.toIntOrNull()
+    val ciCompileSdkPreview = providers.gradleProperty("CI_COMPILE_SDK_PREVIEW").orNull
+
     namespace = "dev.busung.s25uroot"
-    compileSdk = 37
+    if (!ciCompileSdkPreview.isNullOrBlank()) {
+        compileSdkPreview = ciCompileSdkPreview
+    } else {
+        compileSdk = ciCompileSdk ?: 37
+    }
 
     defaultConfig {
         applicationId = "dev.busung.s25uroot"
