@@ -27,13 +27,13 @@ jobs:
 
       - name: Install SDK components
         run: |
-          if sdkmanager --install "platforms;android-37"; then
+          if sdkmanager --install "platforms;android-37.1"; then
             echo "GRADLE_SDK_FLAGS=" >> "$GITHUB_ENV"
-          elif sdkmanager --channel=3 --install "platforms;android-Baklava"; then
-            echo "GRADLE_SDK_FLAGS=-PCI_COMPILE_SDK_PREVIEW=Baklava" >> "$GITHUB_ENV"
+          elif sdkmanager --install "platforms;android-37.0"; then
+            echo "GRADLE_SDK_FLAGS=" >> "$GITHUB_ENV"
           else
-            echo "No API 37+ platform package available on this runner" >&2
-            sdkmanager --list | sed -n '1,200p'
+            echo "No Android 37 platform package available on this runner" >&2
+            sdkmanager --list | sed -n '1,240p'
             exit 1
           fi
 
