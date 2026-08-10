@@ -17,23 +17,52 @@ data class VerifiedPayloads(
 
 class PayloadRepository(private val context: Context) {
     fun loadTargets(): List<TargetProfile> {
-        return try {
-            val commit = resolveMainCommit()
-            val manifestBytes = downloadBytes(rawUrl(commit, "support/targets-v3.json"), MAX_MANIFEST_BYTES)
-            SupportManifest.parse(manifestBytes).targets.map { profile -> profile.copy(
-                exploit = profile.exploit.copy(url = pinArtifactUrl(profile.exploit.url, commit)),
-                kernelSu = profile.kernelSu.copy(url = pinArtifactUrl(profile.kernelSu.url, commit)),
-            ) }
-        } catch (error: Throwable) {
-            if (!shouldFallbackToMain(error)) throw error
-            val manifestBytes = downloadBytes("${MUTABLE_RAW_PREFIX}support/targets-v3.json", MAX_MANIFEST_BYTES)
-            SupportManifest.parse(manifestBytes).targets.map { profile ->
-                profile.copy(
-                    exploit = profile.exploit.copy(url = normalizeToMutableRaw(profile.exploit.url)),
-                    kernelSu = profile.kernelSu.copy(url = normalizeToMutableRaw(profile.kernelSu.url)),
+        var lastError: Throwable? = null
+        for (repository in repositoryCandidates()) {
+            val rawRepository = "https://raw.githubusercontent.com/$repository"
+            val mutablePrefix = "$rawRepository/main/"
+            try {
+                val commit = resolveMainCommit(repository)
+                val manifestBytes = downloadBytes(
+                    "$rawRepository/$commit/support/targets-v3.json",
+                    MAX_MANIFEST_BYTES,
                 )
+                return SupportManifest.parse(manifestBytes).targets.map { profile ->
+                    profile.copy(
+                        exploit = profile.exploit.copy(
+                            url = pinArtifactUrl(profile.exploit.url, commit, mutablePrefix, rawRepository),
+                        ),
+                        kernelSu = profile.kernelSu.copy(
+                            url = pinArtifactUrl(profile.kernelSu.url, commit, mutablePrefix, rawRepository),
+                        ),
+                    )
+                }
+            } catch (error: Throwable) {
+                lastError = error
+                if (!shouldFallbackToMain(error)) {
+                    continue
+                }
+            }
+            try {
+                val manifestBytes = downloadBytes(
+                    "${mutablePrefix}support/targets-v3.json",
+                    MAX_MANIFEST_BYTES,
+                )
+                return SupportManifest.parse(manifestBytes).targets.map { profile ->
+                    profile.copy(
+                        exploit = profile.exploit.copy(
+                            url = normalizeToMutableRaw(profile.exploit.url, mutablePrefix),
+                        ),
+                        kernelSu = profile.kernelSu.copy(
+                            url = normalizeToMutableRaw(profile.kernelSu.url, mutablePrefix),
+                        ),
+                    )
+                }
+            } catch (error: Throwable) {
+                lastError = error
             }
         }
+        throw (lastError ?: IllegalStateException(context.getString(R.string.repo_no_profile)))
     }
 
     fun resolveTarget(snapshot: DeviceSnapshot): TargetProfile = loadTargets()
@@ -71,7 +100,9 @@ class PayloadRepository(private val context: Context) {
     ): File {
         onProgress(context.getString(R.string.repo_downloading, label))
         val temporary = File(destination.parentFile, "${destination.name}.part")
-        val connection = open(artifact.url)
+        val openResult = openFirstOk(candidateArtifactUrls(artifact.url))
+        val connection = openResult.connection
+        onProgress("[*] URL: ${openResult.url}")
         require(connection.contentLengthLong == -1L || connection.contentLengthLong == artifact.size) {
             context.getString(R.string.repo_size_mismatch, label)
         }
@@ -101,8 +132,11 @@ class PayloadRepository(private val context: Context) {
         return destination
     }
 
-    private fun resolveMainCommit(): String {
-        val response = downloadBytes(COMMIT_API_URL, MAX_COMMIT_RESPONSE_BYTES)
+    private fun resolveMainCommit(repository: String): String {
+        val response = downloadBytes(
+            "https://api.github.com/repos/$repository/git/ref/heads/main",
+            MAX_COMMIT_RESPONSE_BYTES,
+        )
         val commit = JSONObject(response.toString(Charsets.UTF_8))
             .getJSONObject("object")
             .getString("sha")
@@ -110,24 +144,31 @@ class PayloadRepository(private val context: Context) {
         return commit
     }
 
-    private fun rawUrl(commit: String, path: String) = "$RAW_REPOSITORY/$commit/$path"
-
     private fun shouldFallbackToMain(error: Throwable): Boolean {
         val message = error.message ?: return false
-        return message.startsWith("HTTP 403") || message.startsWith("HTTP 429")
+        if (!message.startsWith("HTTP ")) {
+            return true
+        }
+        val code = message.removePrefix("HTTP ").trim().toIntOrNull() ?: return true
+        return code >= 400
     }
 
-    private fun normalizeToMutableRaw(url: String): String {
+    private fun normalizeToMutableRaw(url: String, mutablePrefix: String): String {
         val mainMarker = "/main/"
         val mainIndex = url.indexOf(mainMarker)
         require(mainIndex >= 0) { context.getString(R.string.repo_url_invalid) }
         val suffix = url.substring(mainIndex + mainMarker.length)
-        return "$MUTABLE_RAW_PREFIX$suffix"
+        return "$mutablePrefix$suffix"
     }
 
-    private fun pinArtifactUrl(url: String, commit: String): String {
-        require(url.startsWith(MUTABLE_RAW_PREFIX)) { context.getString(R.string.repo_url_invalid) }
-        return "$RAW_REPOSITORY/$commit/${url.removePrefix(MUTABLE_RAW_PREFIX)}"
+    private fun pinArtifactUrl(
+        url: String,
+        commit: String,
+        mutablePrefix: String,
+        rawRepository: String,
+    ): String {
+        require(url.startsWith(mutablePrefix)) { context.getString(R.string.repo_url_invalid) }
+        return "$rawRepository/$commit/${url.removePrefix(mutablePrefix)}"
     }
 
     private fun downloadBytes(url: String, maximum: Int): ByteArray {
@@ -159,13 +200,53 @@ class PayloadRepository(private val context: Context) {
             require(responseCode == HttpURLConnection.HTTP_OK) { "HTTP $responseCode" }
         }
 
+    private fun openFirstOk(urls: List<String>): OpenResult {
+        var lastError: Throwable? = null
+        for (url in urls) {
+            try {
+                return OpenResult(open(url), url)
+            } catch (error: Throwable) {
+                lastError = error
+            }
+        }
+        throw (lastError ?: IllegalStateException("no candidate URL"))
+    }
+
+    private fun repositoryCandidates(): List<String> = listOf(
+        PAYLOADS_REPOSITORY,
+        "lifeprogrammer369/Root-My-Galaxy-Payloads",
+        "lifeprogrammer269/Root-My-Galaxy-Payloads",
+    ).distinct()
+
+    private fun candidateArtifactUrls(url: String): List<String> {
+        val regex = Regex("^https://raw\\.githubusercontent\\.com/([^/]+)/Root-My-Galaxy-Payloads/(.+)$")
+        val match = regex.find(url) ?: return listOf(url)
+        val suffix = match.groupValues[2]
+        val users = listOf("lifeprogrammer369", "lifeprogrammer269")
+        val out = LinkedHashSet<String>()
+
+        for (user in users) {
+            out += "https://raw.githubusercontent.com/$user/Root-My-Galaxy-Payloads/$suffix"
+        }
+
+        val split = suffix.split('/', limit = 2)
+        if (split.size == 2 && split[0].matches(Regex("[0-9a-f]{40}"))) {
+            val path = split[1]
+            for (user in users) {
+                out += "https://raw.githubusercontent.com/$user/Root-My-Galaxy-Payloads/main/$path"
+            }
+        }
+
+        return out.toList()
+    }
+
+    private data class OpenResult(
+        val connection: HttpURLConnection,
+        val url: String,
+    )
+
     companion object {
         private const val PAYLOADS_REPOSITORY = BuildConfig.PAYLOADS_REPO
-        private const val COMMIT_API_URL =
-            "https://api.github.com/repos/$PAYLOADS_REPOSITORY/git/ref/heads/main"
-        private const val RAW_REPOSITORY =
-            "https://raw.githubusercontent.com/$PAYLOADS_REPOSITORY"
-        private const val MUTABLE_RAW_PREFIX = "$RAW_REPOSITORY/main/"
         private const val MAX_COMMIT_RESPONSE_BYTES = 16 * 1024
         private const val MAX_MANIFEST_BYTES = 256 * 1024
     }
