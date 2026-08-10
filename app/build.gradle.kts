@@ -20,7 +20,7 @@ android {
         targetSdk = 36
         versionCode = 12
         versionName = "0.2.6"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "PAYLOADS_REPO", "\"lifeprogrammer369/Root-My-Galaxy-Payloads\"")
         buildConfigField("String", "PAYLOADS_REPO", "\"lifeprogrammer269/Root-My-Galaxy-Payloads\"")
 
         ndk {
